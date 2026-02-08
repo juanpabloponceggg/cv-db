@@ -45,15 +45,10 @@ export function useAuth() {
   useEffect(() => {
     let mounted = true;
 
-    // Timeout de seguridad — si en 8 segundos no carga, dejar de mostrar "cargando"
     const timeout = setTimeout(() => {
-      if (mounted && loading) {
-        console.warn("Timeout de autenticación — forzando fin de carga");
-        setLoading(false);
-      }
+      if (mounted) setLoading(false);
     }, 8000);
 
-    // Checar sesión existente
     supabase.auth.getSession()
       .then(async ({ data: { session } }) => {
         if (!mounted) return;
@@ -64,25 +59,21 @@ export function useAuth() {
       })
       .catch((err) => {
         console.error("Error al restaurar sesión:", err);
-        if (mounted) setError(null);
       })
       .finally(() => {
         if (mounted) setLoading(false);
         clearTimeout(timeout);
       });
 
-    // Listener de cambios
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
         if (event === "SIGNED_IN" && session?.user) {
           setUser(session.user);
           await fetchPerfil(session.user.id);
-          setLoading(false);
         } else if (event === "SIGNED_OUT") {
           setUser(null);
           setPerfil(null);
-          setLoading(false);
         } else if (event === "TOKEN_REFRESHED" && session?.user) {
           setUser(session.user);
         }
@@ -99,7 +90,6 @@ export function useAuth() {
   // ─── Login ───
   const login = async (email, password) => {
     setError(null);
-    setLoading(true);
     try {
       const { data, error: err } = await supabase.auth.signInWithPassword({
         email,
@@ -112,16 +102,13 @@ export function useAuth() {
         } else {
           setError(err.message);
         }
-        setLoading(false);
         return { success: false, error: err.message };
       }
 
       const p = await fetchPerfil(data.user.id);
-      setLoading(false);
       return { success: !!p, perfil: p };
     } catch (e) {
       setError("Error de conexión. Intenta de nuevo.");
-      setLoading(false);
       return { success: false, error: e.message };
     }
   };
