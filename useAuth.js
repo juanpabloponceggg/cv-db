@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./supabase";
 
 export function useAuth() {
@@ -6,8 +6,8 @@ export function useAuth() {
   const [perfil, setPerfil] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const initialLoad = useRef(true);
 
-  // ─── Cargar perfil del usuario ───
   const fetchPerfil = useCallback(async (userId) => {
     try {
       const { data, error: err } = await supabase
@@ -24,8 +24,7 @@ export function useAuth() {
       }
 
       if (!data.activo) {
-        setError("Tu cuenta está desactivada. Contacta al administrador.");
-        await supabase.auth.signOut();
+        setError("Tu cuenta está desactivada.");
         setPerfil(null);
         return null;
       }
@@ -34,40 +33,33 @@ export function useAuth() {
       setError(null);
       return data;
     } catch (e) {
-      console.error("Error inesperado en fetchPerfil:", e);
-      setError("Error de conexión. Recarga la página.");
+      console.error("Error fetchPerfil:", e);
       setPerfil(null);
       return null;
     }
   }, []);
 
-  // ─── Escuchar cambios de sesión ───
   useEffect(() => {
-    let mounted = true;
+    const safety = setTimeout(() => setLoading(false), 5000);
 
-    const timeout = setTimeout(() => {
-      if (mounted) setLoading(false);
-    }, 8000);
-
-    supabase.auth.getSession()
-      .then(async ({ data: { session } }) => {
-        if (!mounted) return;
-        if (session?.user) {
-          setUser(session.user);
-          await fetchPerfil(session.user.id);
-        }
-      })
-      .catch((err) => {
-        console.error("Error al restaurar sesión:", err);
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-        clearTimeout(timeout);
-      });
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user) {
+        setUser(session.user);
+        await fetchPerfil(session.user.id);
+      }
+      initialLoad.current = false;
+      setLoading(false);
+      clearTimeout(safety);
+    }).catch(() => {
+      initialLoad.current = false;
+      setLoading(false);
+      clearTimeout(safety);
+    });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        if (!mounted) return;
+        if (initialLoad.current) return;
+
         if (event === "SIGNED_IN" && session?.user) {
           setUser(session.user);
           await fetchPerfil(session.user.id);
@@ -81,13 +73,11 @@ export function useAuth() {
     );
 
     return () => {
-      mounted = false;
-      clearTimeout(timeout);
+      clearTimeout(safety);
       subscription.unsubscribe();
     };
   }, [fetchPerfil]);
 
-  // ─── Login ───
   const login = async (email, password) => {
     setError(null);
     try {
@@ -105,6 +95,7 @@ export function useAuth() {
         return { success: false, error: err.message };
       }
 
+      setUser(data.user);
       const p = await fetchPerfil(data.user.id);
       return { success: !!p, perfil: p };
     } catch (e) {
@@ -113,34 +104,28 @@ export function useAuth() {
     }
   };
 
-  // ─── Logout ───
   const logout = async () => {
+    setUser(null);
+    setPerfil(null);
     try {
       await supabase.auth.signOut();
     } catch (e) {
-      console.error("Error al cerrar sesión:", e);
+      console.error("Error logout:", e);
     }
-    setUser(null);
-    setPerfil(null);
   };
 
-  // ─── Reset password ───
   const resetPassword = async (email) => {
     const { error: err } = await supabase.auth.resetPasswordForEmail(email);
     if (err) return { success: false, error: err.message };
     return { success: true };
   };
 
-  // ─── Create user (admin only) ───
   const createUser = async ({ email, password, nombre, rol, ejecutivo_id }) => {
     const { data, error: err } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: {
-          nombre_display: nombre,
-          rol: rol,
-        },
+        data: { nombre_display: nombre, rol },
       },
     });
 
