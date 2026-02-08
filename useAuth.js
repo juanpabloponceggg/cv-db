@@ -2,90 +2,137 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabase";
 
 export function useAuth() {
-  const [user, setUser] = useState(null);       // Supabase Auth user
-  const [perfil, setPerfil] = useState(null);    // { rol, ejecutivo_id, nombre_display, activo }
+  const [user, setUser] = useState(null);
+  const [perfil, setPerfil] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   // ─── Cargar perfil del usuario ───
   const fetchPerfil = useCallback(async (userId) => {
-    const { data, error: err } = await supabase
-      .from("perfiles")
-      .select("*")
-      .eq("user_id", userId)
-      .single();
+    try {
+      const { data, error: err } = await supabase
+        .from("perfiles")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
 
-    if (err) {
-      console.error("Error al cargar perfil:", err.message);
-      setError("No se encontró tu perfil. Contacta al administrador.");
+      if (err) {
+        console.error("Error al cargar perfil:", err.message);
+        setError("No se encontró tu perfil. Contacta al administrador.");
+        setPerfil(null);
+        return null;
+      }
+
+      if (!data.activo) {
+        setError("Tu cuenta está desactivada. Contacta al administrador.");
+        await supabase.auth.signOut();
+        setPerfil(null);
+        return null;
+      }
+
+      setPerfil(data);
+      setError(null);
+      return data;
+    } catch (e) {
+      console.error("Error inesperado en fetchPerfil:", e);
+      setError("Error de conexión. Recarga la página.");
       setPerfil(null);
       return null;
     }
-
-    if (!data.activo) {
-      setError("Tu cuenta está desactivada. Contacta al administrador.");
-      await supabase.auth.signOut();
-      setPerfil(null);
-      return null;
-    }
-
-    setPerfil(data);
-    setError(null);
-    return data;
   }, []);
 
   // ─── Escuchar cambios de sesión ───
   useEffect(() => {
-    // Checar sesión existente
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setUser(session.user);
-        fetchPerfil(session.user.id).finally(() => setLoading(false));
-      } else {
+    let mounted = true;
+
+    // Timeout de seguridad — si en 8 segundos no carga, dejar de mostrar "cargando"
+    const timeout = setTimeout(() => {
+      if (mounted && loading) {
+        console.warn("Timeout de autenticación — forzando fin de carga");
         setLoading(false);
       }
-    });
+    }, 8000);
+
+    // Checar sesión existente
+    supabase.auth.getSession()
+      .then(async ({ data: { session } }) => {
+        if (!mounted) return;
+        if (session?.user) {
+          setUser(session.user);
+          await fetchPerfil(session.user.id);
+        }
+      })
+      .catch((err) => {
+        console.error("Error al restaurar sesión:", err);
+        if (mounted) setError(null);
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
+        clearTimeout(timeout);
+      });
 
     // Listener de cambios
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        if (!mounted) return;
         if (event === "SIGNED_IN" && session?.user) {
           setUser(session.user);
           await fetchPerfil(session.user.id);
+          setLoading(false);
         } else if (event === "SIGNED_OUT") {
           setUser(null);
           setPerfil(null);
+          setLoading(false);
+        } else if (event === "TOKEN_REFRESHED" && session?.user) {
+          setUser(session.user);
         }
       }
     );
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      clearTimeout(timeout);
+      subscription.unsubscribe();
+    };
   }, [fetchPerfil]);
 
   // ─── Login ───
   const login = async (email, password) => {
     setError(null);
-    const { data, error: err } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    setLoading(true);
+    try {
+      const { data, error: err } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (err) {
-      if (err.message.includes("Invalid login")) {
-        setError("Email o contraseña incorrectos");
-      } else {
-        setError(err.message);
+      if (err) {
+        if (err.message.includes("Invalid login")) {
+          setError("Email o contraseña incorrectos");
+        } else {
+          setError(err.message);
+        }
+        setLoading(false);
+        return { success: false, error: err.message };
       }
-      return { success: false, error: err.message };
-    }
 
-    const p = await fetchPerfil(data.user.id);
-    return { success: !!p, perfil: p };
+      const p = await fetchPerfil(data.user.id);
+      setLoading(false);
+      return { success: !!p, perfil: p };
+    } catch (e) {
+      setError("Error de conexión. Intenta de nuevo.");
+      setLoading(false);
+      return { success: false, error: e.message };
+    }
   };
 
   // ─── Logout ───
   const logout = async () => {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.error("Error al cerrar sesión:", e);
+    }
     setUser(null);
     setPerfil(null);
   };
@@ -99,9 +146,6 @@ export function useAuth() {
 
   // ─── Create user (admin only) ───
   const createUser = async ({ email, password, nombre, rol, ejecutivo_id }) => {
-    // Usa la función admin de Supabase para crear usuarios
-    // Nota: en producción se usa una Edge Function o supabase.auth.admin
-    // Por ahora usamos signUp + metadatos
     const { data, error: err } = await supabase.auth.signUp({
       email,
       password,
@@ -115,7 +159,6 @@ export function useAuth() {
 
     if (err) return { success: false, error: err.message };
 
-    // Actualizar el perfil con el ejecutivo_id si es ejecutivo
     if (rol === "ejecutivo" && ejecutivo_id) {
       await supabase
         .from("perfiles")
@@ -123,7 +166,6 @@ export function useAuth() {
         .eq("user_id", data.user.id);
     }
 
-    // Si es admin, asegurar rol admin
     if (rol === "admin") {
       await supabase
         .from("perfiles")
