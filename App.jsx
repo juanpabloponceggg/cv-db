@@ -4555,11 +4555,17 @@ export default function App() {
   const [activeScreen, setActiveScreen] = useState(null);
 
   // Set default screen based on role when perfil loads
-  useEffect(() => {
-    if (perfil && activeScreen === null) {
-      setActiveScreen(perfil.rol === "ejecutivo" ? "portal" : "clientes");
+useEffect(() => {
+    if (perfil) {
+      if (perfil.rol === "ejecutivo") {
+        setActiveScreen("portal");
+      } else if (activeScreen === null || activeScreen === "portal") {
+        setActiveScreen("clientes");
+      }
+    } else {
+      setActiveScreen(null);
     }
-  }, [perfil, activeScreen]);
+  }, [perfil]);
 
   if (loading) {
     return <LoadingScreen />;
@@ -4589,13 +4595,18 @@ export default function App() {
         flex: 1,
         overflowY: "auto",
       }}>
-        {activeScreen === "clientes" && <TablaClientes perfil={perfil} />}
-        {activeScreen === "nomina" && <ResumenNomina />}
-        {activeScreen === "motos" && <ResumenMotos />}
-        {activeScreen === "catalogo" && <CatalogoEjecutivos />}
-        {activeScreen === "usuarios" && <GestionUsuarios />}
-        {activeScreen === "export" && <ExportExcel />}
-        {activeScreen === "portal" && <PortalEjecutivo perfil={perfil} />}
+        {isEjecutivo ? (
+          <PortalEjecutivo perfil={perfil} />
+        ) : (
+          <>
+            {activeScreen === "clientes" && <TablaClientes perfil={perfil} />}
+            {activeScreen === "nomina" && <ResumenNomina />}
+            {activeScreen === "motos" && <ResumenMotos />}
+            {activeScreen === "catalogo" && <CatalogoEjecutivos />}
+            {activeScreen === "usuarios" && <GestionUsuarios />}
+            {activeScreen === "export" && <ExportExcel />}
+          </>
+        )}
 
         {!["clientes", "nomina", "motos", "catalogo", "usuarios", "export", "portal"].includes(activeScreen) && (
           <div style={{ padding: 32 }}>
